@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# mtb-commute
 
-## Getting Started
+A single-page widget that shows **live traffic-aware drive times** from your phone's current location to your saved mountain bike trailheads, ranked fastest-first. Built to be deployed as one Vercel URL that you paste into a WhatsApp group — anyone in the group taps it and sees their own ETAs.
 
-First, run the development server:
+## How it works
+
+1. You open `/settings` once, paste 4 Google Maps URLs (or `lat,lng` pairs) for your trailheads, and click **Save & generate link**.
+2. The page produces a shareable URL that has all 4 trail locations encoded in the query string (no database needed).
+3. You paste that URL once in WhatsApp. When anyone taps it, the page asks for their location (browser permission), calls Google's Routes API with traffic data, and shows ranked ETAs.
+
+No accounts, no Meta approval, no backend state — just a URL.
+
+## Setup
+
+### 1. Get a Google Maps Platform API key
+
+1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/google/maps-apis/credentials).
+2. Create an API key.
+3. In [APIs & Services → Library](https://console.cloud.google.com/apis/library), enable the **Routes API**.
+4. Restrict the key to the Routes API and (after deploy) to your Vercel domain via the HTTP referrer restriction.
+
+Pricing: traffic-aware route matrix calls are ~$5 per 1,000 requests. Google gives every account **$200 of free Maps credits per month**, which covers ~40,000 calls — way more than a friend group will use.
+
+### 2. Local development
 
 ```bash
+cp .env.example .env.local
+# edit .env.local and paste your key
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000/settings to add your trails.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Deploy to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npx vercel deploy
+# then set the env var:
+npx vercel env add GOOGLE_MAPS_API_KEY production
+npx vercel deploy --prod
+```
 
-## Learn More
+Or use the Vercel dashboard: import the repo, add `GOOGLE_MAPS_API_KEY` under Project Settings → Environment Variables, deploy.
 
-To learn more about Next.js, take a look at the following resources:
+### 4. Share the link
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Open `https://your-app.vercel.app/settings` on your phone.
+2. Add the 4 trails (paste Google Maps URLs from the Maps app's Share → Copy link).
+3. Tap **Save & generate link** → **Copy shareable link**.
+4. Paste in WhatsApp. Pin the message.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Supported location formats on the settings page
 
-## Deploy on Vercel
+- `37.7749, -122.4194` — direct lat,lng paste
+- `https://www.google.com/maps/place/.../@37.7749,-122.4194,15z/...` — long URLs from desktop Maps
+- `https://www.google.com/maps?q=37.7749,-122.4194`
+- URLs containing `!3d37.7749!4d-122.4194` (Maps mobile share)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+> Short links like `https://maps.app.goo.gl/xxxx` **don't contain coordinates** — open the link in a browser, wait for it to expand into the long URL, then copy that.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Stack
+
+- Next.js 16 (App Router) on Vercel Fluid Compute
+- Google Routes API `computeRouteMatrix` with `routingPreference: TRAFFIC_AWARE`
+- Browser geolocation (per-user)
+- Tailwind CSS v4
+- Zero backend storage — config travels in the URL

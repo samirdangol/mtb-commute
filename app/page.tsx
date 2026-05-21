@@ -1,65 +1,244 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import Link from "next/link";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  decodeTrailsFromParam,
+  loadTrailsFromStorage,
+  saveTrailsToStorage,
+  type Trail,
+} from "@/lib/trails";
+
+type EtaResult = {
+  id: string;
+  durationSeconds: number | null;
+  staticDurationSeconds: number | null;
+  distanceMeters: number | null;
+  trafficDelaySeconds: number | null;
+  condition: string | null;
+};
+
+type LoadState = "idle" | "locating" | "fetching" | "ready" | "error";
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function formatDistance(meters: number | null): string {
+  if (meters === null) return "—";
+  const miles = meters / 1609.344;
+  return miles < 10 ? `${miles.toFixed(1)} mi` : `${Math.round(miles)} mi`;
+}
+
+function formatTrafficDelta(delaySeconds: number | null): { label: string; tone: "good" | "warn" | "bad" | "neutral" } {
+  if (delaySeconds === null) return { label: "", tone: "neutral" };
+  const mins = Math.round(delaySeconds / 60);
+  if (mins <= 1) return { label: "Light traffic", tone: "good" };
+  if (mins < 10) return { label: `+${mins} min traffic`, tone: "warn" };
+  return { label: `+${mins} min traffic`, tone: "bad" };
+}
+
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const [trails, setTrails] = useState<Trail[]>([]);
+  const [results, setResults] = useState<EtaResult[]>([]);
+  const [state, setState] = useState<LoadState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    const configParam = searchParams.get("config");
+    if (configParam) {
+      const decoded = decodeTrailsFromParam(configParam);
+      if (decoded && decoded.length > 0) {
+        setTrails(decoded);
+        saveTrailsToStorage(decoded);
+        return;
+      }
+    }
+    setTrails(loadTrailsFromStorage());
+  }, [searchParams]);
+
+  const fetchEtas = useCallback(
+    async (origin: { lat: number; lng: number }) => {
+      if (trails.length === 0) return;
+      setState("fetching");
+      setError(null);
+      try {
+        const response = await fetch("/api/etas", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            origin,
+            destinations: trails.map((t) => ({ id: t.id, lat: t.lat, lng: t.lng })),
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? "Failed to fetch drive times");
+        }
+        setResults(data.results);
+        setFetchedAt(data.fetchedAt);
+        setState("ready");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+        setState("error");
+      }
+    },
+    [trails],
+  );
+
+  const refresh = useCallback(() => {
+    if (trails.length === 0) return;
+    setState("locating");
+    setError(null);
+    if (!navigator.geolocation) {
+      setError("Geolocation not supported by this browser.");
+      setState("error");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => fetchEtas({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => {
+        setError(`Location denied or unavailable: ${err.message}`);
+        setState("error");
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+    );
+  }, [fetchEtas, trails]);
+
+  useEffect(() => {
+    if (trails.length > 0 && state === "idle") {
+      refresh();
+    }
+  }, [trails, state, refresh]);
+
+  const ranked = useMemo(() => {
+    return trails
+      .map((trail) => {
+        const eta = results.find((r) => r.id === trail.id);
+        return { trail, eta };
+      })
+      .sort((a, b) => {
+        const ad = a.eta?.durationSeconds ?? Number.POSITIVE_INFINITY;
+        const bd = b.eta?.durationSeconds ?? Number.POSITIVE_INFINITY;
+        return ad - bd;
+      });
+  }, [trails, results]);
+
+  if (trails.length === 0) {
+    return (
+      <main className="mx-auto flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center px-4 text-center">
+        <h1 className="text-2xl font-semibold tracking-tight">No trails set up yet</h1>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Add your trailhead locations to see live drive times.
+        </p>
+        <Link
+          href="/settings"
+          className="mt-6 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          Pinpoint trails →
+        </Link>
+      </main>
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="mx-auto w-full max-w-2xl px-4 py-6 sm:py-10">
+      <header className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Trail drive times</h1>
+          <p className="mt-1 text-xs text-zinc-500">
+            {state === "locating" && "Getting your location…"}
+            {state === "fetching" && "Calling traffic-aware routing…"}
+            {state === "ready" && fetchedAt && `Updated ${new Date(fetchedAt).toLocaleTimeString()}`}
+            {state === "error" && error}
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={state === "locating" || state === "fetching"}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            {state === "locating" || state === "fetching" ? "…" : "Refresh"}
+          </button>
+          <Link
+            href="/settings"
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
           >
-            Documentation
-          </a>
+            Edit
+          </Link>
         </div>
-      </main>
-    </div>
+      </header>
+
+      <ol className="space-y-3">
+        {ranked.map(({ trail, eta }, idx) => {
+          const delta = formatTrafficDelta(eta?.trafficDelaySeconds ?? null);
+          const mapsLink = `https://www.google.com/maps/dir/?api=1&destination=${trail.lat},${trail.lng}&travelmode=driving`;
+          return (
+            <li
+              key={trail.id}
+              className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-zinc-500">#{idx + 1}</span>
+                    <h2 className="truncate text-base font-semibold">{trail.name}</h2>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    {formatDistance(eta?.distanceMeters ?? null)}
+                    {delta.label && (
+                      <span
+                        className={`ml-2 ${
+                          delta.tone === "good"
+                            ? "text-green-700 dark:text-green-400"
+                            : delta.tone === "warn"
+                              ? "text-amber-700 dark:text-amber-400"
+                              : delta.tone === "bad"
+                                ? "text-red-700 dark:text-red-400"
+                                : ""
+                        }`}
+                      >
+                        · {delta.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-semibold tabular-nums">
+                    {formatDuration(eta?.durationSeconds ?? null)}
+                  </div>
+                  <a
+                    href={mapsLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-zinc-500 underline-offset-4 hover:underline"
+                  >
+                    Open in Maps ↗
+                  </a>
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={null}>
+      <HomeContent />
+    </Suspense>
   );
 }
