@@ -55,7 +55,8 @@ export default function SettingsPage() {
   const [categories, setCategories] = useState<string[]>([]);
   const [categoryInput, setCategoryInput] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [categoryUrls, setCategoryUrls] = useState<{ category: string; url: string }[]>([]);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = loadTrailsFromStorage();
@@ -68,7 +69,8 @@ export default function SettingsPage() {
   const updateDraft = (id: string, patch: Partial<Draft>) => {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
     setShareUrl(null);
-    setCopied(false);
+    setCategoryUrls([]);
+    setCopiedKey(null);
   };
 
   const addDraft = () => setDrafts((prev) => [...prev, emptyDraft()]);
@@ -90,15 +92,25 @@ export default function SettingsPage() {
     saveTrailsToStorage(trails);
     saveCategoriesToStorage(categories);
     const param = encodeTrailsToParam(trails, categories);
-    const url = `${window.location.origin}/?config=${param}`;
-    setShareUrl(url);
-    setCopied(false);
+    setShareUrl(`${window.location.origin}/?config=${param}`);
+    setCategoryUrls(
+      categories
+        .map((cat) => {
+          const catTrails = trails.filter((t) => t.category === cat);
+          if (catTrails.length === 0) return null;
+          return {
+            category: cat,
+            url: `${window.location.origin}/?config=${encodeTrailsToParam(catTrails, [cat])}`,
+          };
+        })
+        .filter((x): x is { category: string; url: string } => x !== null),
+    );
+    setCopiedKey(null);
   };
 
-  const onCopy = async () => {
-    if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
+  const onCopy = async (key: string, url: string) => {
+    await navigator.clipboard.writeText(url);
+    setCopiedKey(key);
   };
 
   const previewParsed = (raw: string) => {
@@ -273,17 +285,25 @@ export default function SettingsPage() {
           </button>
         </div>
         {shareUrl && (
-          <div className="mt-3 space-y-2">
-            <div className="break-all rounded-md bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-900">
-              {shareUrl}
-            </div>
-            <button
-              type="button"
-              onClick={onCopy}
-              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-xs font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              {copied ? "✓ Copied — paste in WhatsApp" : "Copy shareable link"}
-            </button>
+          <div className="mt-3 space-y-1.5">
+            {[
+              { label: "All trails", key: "all", url: shareUrl },
+              ...categoryUrls.map((c) => ({ label: c.category, key: c.category, url: c.url })),
+            ].map(({ label, key, url }) => (
+              <div
+                key={key}
+                className="flex items-center justify-between gap-3 rounded-md bg-zinc-100 px-3 py-2 dark:bg-zinc-900"
+              >
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">{label}</span>
+                <button
+                  type="button"
+                  onClick={() => onCopy(key, url)}
+                  className="shrink-0 text-xs font-medium text-zinc-800 hover:text-zinc-900 dark:text-zinc-200 dark:hover:text-zinc-100"
+                >
+                  {copiedKey === key ? "✓ Copied" : "Copy link"}
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>
