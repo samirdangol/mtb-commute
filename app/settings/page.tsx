@@ -5,9 +5,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   encodeTrailsToParam,
   isShortGoogleMapsUrl,
+  loadCategoriesFromStorage,
   loadTrailsFromStorage,
   makeTrailId,
   parseLatLngInput,
+  saveCategoriesToStorage,
   saveTrailsToStorage,
   type Trail,
 } from "@/lib/trails";
@@ -16,10 +18,11 @@ type Draft = {
   id: string;
   name: string;
   raw: string;
+  category?: string;
 };
 
 function toDraft(trail: Trail): Draft {
-  return { id: trail.id, name: trail.name, raw: `${trail.lat}, ${trail.lng}` };
+  return { id: trail.id, name: trail.name, raw: `${trail.lat}, ${trail.lng}`, category: trail.category };
 }
 
 function emptyDraft(): Draft {
@@ -42,19 +45,22 @@ function buildTrails(drafts: Draft[]): { trails: Trail[]; errors: Record<string,
         : "Paste a Google Maps URL with coordinates, or type 'lat,lng' (e.g. 37.7749,-122.4194).";
       continue;
     }
-    trails.push({ id: d.id, name: d.name.trim(), lat: parsed.lat, lng: parsed.lng });
+    trails.push({ id: d.id, name: d.name.trim(), lat: parsed.lat, lng: parsed.lng, category: d.category });
   }
   return { trails, errors };
 }
 
 export default function SettingsPage() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [categoryInput, setCategoryInput] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const stored = loadTrailsFromStorage();
     setDrafts(stored.length > 0 ? stored.map(toDraft) : [emptyDraft(), emptyDraft(), emptyDraft(), emptyDraft()]);
+    setCategories(loadCategoriesFromStorage());
   }, []);
 
   const { trails, errors } = useMemo(() => buildTrails(drafts), [drafts]);
@@ -68,9 +74,22 @@ export default function SettingsPage() {
   const addDraft = () => setDrafts((prev) => [...prev, emptyDraft()]);
   const removeDraft = (id: string) => setDrafts((prev) => prev.filter((d) => d.id !== id));
 
+  const addCategory = () => {
+    const name = categoryInput.trim();
+    if (!name || categories.includes(name)) return;
+    setCategories((prev) => [...prev, name]);
+    setCategoryInput("");
+  };
+
+  const removeCategory = (name: string) => {
+    setCategories((prev) => prev.filter((c) => c !== name));
+    setDrafts((prev) => prev.map((d) => (d.category === name ? { ...d, category: undefined } : d)));
+  };
+
   const onSave = () => {
     saveTrailsToStorage(trails);
-    const param = encodeTrailsToParam(trails);
+    saveCategoriesToStorage(categories);
+    const param = encodeTrailsToParam(trails, categories);
     const url = `${window.location.origin}/?config=${param}`;
     setShareUrl(url);
     setCopied(false);
@@ -103,6 +122,54 @@ export default function SettingsPage() {
           View ETAs →
         </Link>
       </header>
+
+      {/* Category manager */}
+      <section className="mb-8 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <h2 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">Categories</h2>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={categoryInput}
+            onChange={(e) => setCategoryInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addCategory();
+              }
+            }}
+            placeholder="e.g. Mountain Bike Trails"
+            className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-900 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-100"
+          />
+          <button
+            type="button"
+            onClick={addCategory}
+            disabled={!categoryInput.trim() || categories.includes(categoryInput.trim())}
+            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
+            Add
+          </button>
+        </div>
+        {categories.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {categories.map((cat) => (
+              <span
+                key={cat}
+                className="flex items-center gap-1 rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium dark:bg-zinc-800"
+              >
+                {cat}
+                <button
+                  type="button"
+                  onClick={() => removeCategory(cat)}
+                  aria-label={`Remove ${cat}`}
+                  className="ml-0.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="space-y-4">
         {drafts.map((draft, idx) => {
@@ -158,6 +225,25 @@ export default function SettingsPage() {
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">{error}</span>
                   )}
                 </label>
+                {categories.length > 0 && (
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                      Category
+                    </span>
+                    <select
+                      value={draft.category ?? ""}
+                      onChange={(e) => updateDraft(draft.id, { category: e.target.value || undefined })}
+                      className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-900 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-100"
+                    >
+                      <option value="">No category</option>
+                      {categories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
             </div>
           );

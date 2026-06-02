@@ -3,6 +3,7 @@ export type Trail = {
   name: string;
   lat: number;
   lng: number;
+  category?: string;
 };
 
 export type LatLng = { lat: number; lng: number };
@@ -71,27 +72,64 @@ function fromBase64Url(str: string): string {
   return decodeURIComponent(escape(atob(padded)));
 }
 
-export function encodeTrailsToParam(trails: Trail[]): string {
-  const compact = trails.map(({ name, lat, lng }) => ({ n: name, a: lat, o: lng }));
-  return toBase64Url(JSON.stringify(compact));
+type CompactTrail = { n: string; a: number; o: number; c?: string };
+
+// v2 format: { v: 2, t: CompactTrail[], k?: string[] }
+// Legacy format (v1): CompactTrail[]  — still decoded for backward compat
+export function encodeTrailsToParam(trails: Trail[], categories: string[]): string {
+  const config = {
+    v: 2 as const,
+    t: trails.map(({ name, lat, lng, category }) => {
+      const ct: CompactTrail = { n: name, a: lat, o: lng };
+      if (category) ct.c = category;
+      return ct;
+    }),
+    ...(categories.length > 0 && { k: categories }),
+  };
+  return toBase64Url(JSON.stringify(config));
 }
 
-export function decodeTrailsFromParam(param: string): Trail[] | null {
+export type DecodedConfig = { trails: Trail[]; categories: string[] };
+
+export function decodeTrailsFromParam(param: string): DecodedConfig | null {
   try {
-    const compact = JSON.parse(fromBase64Url(param)) as Array<{ n: string; a: number; o: number }>;
-    if (!Array.isArray(compact)) return null;
-    return compact.map((c) => ({
-      id: makeTrailId(),
-      name: String(c.n),
-      lat: Number(c.a),
-      lng: Number(c.o),
-    }));
+    const raw = JSON.parse(fromBase64Url(param));
+
+    // Legacy v1: plain array
+    if (Array.isArray(raw)) {
+      return {
+        trails: raw.map((c: { n: string; a: number; o: number }) => ({
+          id: makeTrailId(),
+          name: String(c.n),
+          lat: Number(c.a),
+          lng: Number(c.o),
+        })),
+        categories: [],
+      };
+    }
+
+    // v2
+    if (raw?.v === 2 && Array.isArray(raw.t)) {
+      return {
+        trails: (raw.t as CompactTrail[]).map((c) => ({
+          id: makeTrailId(),
+          name: String(c.n),
+          lat: Number(c.a),
+          lng: Number(c.o),
+          category: c.c ? String(c.c) : undefined,
+        })),
+        categories: Array.isArray(raw.k) ? (raw.k as unknown[]).map(String) : [],
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
 }
 
 const STORAGE_KEY = "mtb-commute:trails:v1";
+const CATEGORIES_KEY = "mtb-commute:categories:v1";
 
 export function loadTrailsFromStorage(): Trail[] {
   if (typeof window === "undefined") return [];
@@ -108,4 +146,21 @@ export function loadTrailsFromStorage(): Trail[] {
 export function saveTrailsToStorage(trails: Trail[]): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(trails));
+}
+
+export function loadCategoriesFromStorage(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCategoriesToStorage(categories: string[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
 }

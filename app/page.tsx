@@ -5,7 +5,9 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   decodeTrailsFromParam,
+  loadCategoriesFromStorage,
   loadTrailsFromStorage,
+  saveCategoriesToStorage,
   saveTrailsToStorage,
   type Trail,
 } from "@/lib/trails";
@@ -47,6 +49,7 @@ function formatTrafficDelta(delaySeconds: number | null): { label: string; tone:
 function HomeContent() {
   const searchParams = useSearchParams();
   const [trails, setTrails] = useState<Trail[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [results, setResults] = useState<EtaResult[]>([]);
   const [state, setState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -56,13 +59,16 @@ function HomeContent() {
     const configParam = searchParams.get("config");
     if (configParam) {
       const decoded = decodeTrailsFromParam(configParam);
-      if (decoded && decoded.length > 0) {
-        setTrails(decoded);
-        saveTrailsToStorage(decoded);
+      if (decoded && decoded.trails.length > 0) {
+        setTrails(decoded.trails);
+        setCategories(decoded.categories);
+        saveTrailsToStorage(decoded.trails);
+        saveCategoriesToStorage(decoded.categories);
         return;
       }
     }
     setTrails(loadTrailsFromStorage());
+    setCategories(loadCategoriesFromStorage());
   }, [searchParams]);
 
   const fetchEtas = useCallback(
@@ -132,6 +138,30 @@ function HomeContent() {
       });
   }, [trails, results]);
 
+  // Group trails by category; falls back to a single ungrouped section when no categories are assigned.
+  const grouped = useMemo(() => {
+    const hasCategories = ranked.some((r) => r.trail.category);
+    if (!hasCategories) return [{ label: null as string | null, items: ranked }];
+
+    const groups: { label: string | null; items: typeof ranked }[] = [];
+    const assignedIds = new Set<string>();
+
+    for (const cat of categories) {
+      const items = ranked.filter((r) => r.trail.category === cat);
+      if (items.length > 0) {
+        groups.push({ label: cat, items });
+        items.forEach((r) => assignedIds.add(r.trail.id));
+      }
+    }
+
+    const remaining = ranked.filter((r) => !assignedIds.has(r.trail.id));
+    if (remaining.length > 0) {
+      groups.push({ label: "Uncategorized", items: remaining });
+    }
+
+    return groups;
+  }, [ranked, categories]);
+
   if (trails.length === 0) {
     return (
       <main className="mx-auto flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center px-4 text-center">
@@ -179,58 +209,69 @@ function HomeContent() {
         </div>
       </header>
 
-      <ol className="space-y-3">
-        {ranked.map(({ trail, eta }, idx) => {
-          const delta = formatTrafficDelta(eta?.trafficDelaySeconds ?? null);
-          const mapsLink = `https://www.google.com/maps/dir/?api=1&destination=${trail.lat},${trail.lng}&travelmode=driving`;
-          return (
-            <li
-              key={trail.id}
-              className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-zinc-500">#{idx + 1}</span>
-                    <h2 className="truncate text-base font-semibold">{trail.name}</h2>
-                  </div>
-                  <div className="mt-1 text-xs text-zinc-500">
-                    {formatDistance(eta?.distanceMeters ?? null)}
-                    {delta.label && (
-                      <span
-                        className={`ml-2 ${
-                          delta.tone === "good"
-                            ? "text-green-700 dark:text-green-400"
-                            : delta.tone === "warn"
-                              ? "text-amber-700 dark:text-amber-400"
-                              : delta.tone === "bad"
-                                ? "text-red-700 dark:text-red-400"
-                                : ""
-                        }`}
-                      >
-                        · {delta.label}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-semibold tabular-nums">
-                    {formatDuration(eta?.durationSeconds ?? null)}
-                  </div>
-                  <a
-                    href={mapsLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-zinc-500 underline-offset-4 hover:underline"
+      <div className="space-y-6">
+        {grouped.map(({ label, items }) => (
+          <section key={label ?? "__all"}>
+            {label && (
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                {label}
+              </h2>
+            )}
+            <ol className="space-y-3">
+              {items.map(({ trail, eta }, idx) => {
+                const delta = formatTrafficDelta(eta?.trafficDelaySeconds ?? null);
+                const mapsLink = `https://www.google.com/maps/dir/?api=1&destination=${trail.lat},${trail.lng}&travelmode=driving`;
+                return (
+                  <li
+                    key={trail.id}
+                    className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
                   >
-                    Open in Maps ↗
-                  </a>
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-zinc-500">#{idx + 1}</span>
+                          <h2 className="truncate text-base font-semibold">{trail.name}</h2>
+                        </div>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {formatDistance(eta?.distanceMeters ?? null)}
+                          {delta.label && (
+                            <span
+                              className={`ml-2 ${
+                                delta.tone === "good"
+                                  ? "text-green-700 dark:text-green-400"
+                                  : delta.tone === "warn"
+                                    ? "text-amber-700 dark:text-amber-400"
+                                    : delta.tone === "bad"
+                                      ? "text-red-700 dark:text-red-400"
+                                      : ""
+                              }`}
+                            >
+                              · {delta.label}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-semibold tabular-nums">
+                          {formatDuration(eta?.durationSeconds ?? null)}
+                        </div>
+                        <a
+                          href={mapsLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-zinc-500 underline-offset-4 hover:underline"
+                        >
+                          Open in Maps ↗
+                        </a>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ))}
+      </div>
     </main>
   );
 }
