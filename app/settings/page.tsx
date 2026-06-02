@@ -1,7 +1,10 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+
+const MapPicker = dynamic(() => import("@/components/MapPicker"), { ssr: false });
 import {
   encodeTrailsToParam,
   isShortGoogleMapsUrl,
@@ -52,6 +55,10 @@ function buildTrails(drafts: Draft[]): { trails: Trail[]; errors: Record<string,
 
 export default function SettingsPage() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [openMapId, setOpenMapId] = useState<string | null>(null);
+  const [addressInputs, setAddressInputs] = useState<Record<string, string>>({});
+  const [addressErrors, setAddressErrors] = useState<Record<string, string>>({});
+  const [addressLoading, setAddressLoading] = useState<Record<string, boolean>>({});
   const [categories, setCategories] = useState<string[]>([]);
   const [categoryInput, setCategoryInput] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -71,6 +78,30 @@ export default function SettingsPage() {
     setShareUrl(null);
     setCategoryUrls([]);
     setCopiedKey(null);
+  };
+
+  const searchAddress = async (draftId: string) => {
+    const q = addressInputs[draftId]?.trim();
+    if (!q) return;
+    setAddressLoading((prev) => ({ ...prev, [draftId]: true }));
+    setAddressErrors((prev) => ({ ...prev, [draftId]: "" }));
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=us`,
+      );
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) {
+        setAddressErrors((prev) => ({ ...prev, [draftId]: "Address not found — try adding a city or state." }));
+        return;
+      }
+      const { lat, lon } = data[0] as { lat: string; lon: string };
+      updateDraft(draftId, { raw: `${parseFloat(lat).toFixed(6)}, ${parseFloat(lon).toFixed(6)}` });
+      setAddressInputs((prev) => ({ ...prev, [draftId]: "" }));
+    } catch {
+      setAddressErrors((prev) => ({ ...prev, [draftId]: "Search failed — check your connection." }));
+    } finally {
+      setAddressLoading((prev) => ({ ...prev, [draftId]: false }));
+    }
   };
 
   const addDraft = () => setDrafts((prev) => [...prev, emptyDraft()]);
@@ -217,10 +248,19 @@ export default function SettingsPage() {
                     className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-900 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-100"
                   />
                 </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                    Google Maps URL or lat,lng
-                  </span>
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                      Google Maps URL or lat,lng
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setOpenMapId(openMapId === draft.id ? null : draft.id)}
+                      className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline dark:hover:text-zinc-100"
+                    >
+                      {openMapId === draft.id ? "Close map" : "Pick on map"}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={draft.raw}
@@ -236,7 +276,50 @@ export default function SettingsPage() {
                   {error && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">{error}</span>
                   )}
-                </label>
+                  <div className="mt-3">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={addressInputs[draft.id] ?? ""}
+                        onChange={(e) =>
+                          setAddressInputs((prev) => ({ ...prev, [draft.id]: e.target.value }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            searchAddress(draft.id);
+                          }
+                        }}
+                        placeholder="Search US address…"
+                        className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-900 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => searchAddress(draft.id)}
+                        disabled={!addressInputs[draft.id]?.trim() || addressLoading[draft.id]}
+                        className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+                      >
+                        {addressLoading[draft.id] ? "…" : "Search"}
+                      </button>
+                    </div>
+                    {addressErrors[draft.id] && (
+                      <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
+                        {addressErrors[draft.id]}
+                      </span>
+                    )}
+                  </div>
+                  {openMapId === draft.id && (
+                    <div className="mt-2">
+                      <MapPicker
+                        value={parseLatLngInput(draft.raw)}
+                        onChange={(lat, lng) =>
+                          updateDraft(draft.id, { raw: `${lat.toFixed(6)}, ${lng.toFixed(6)}` })
+                        }
+                      />
+                      <p className="mt-1 text-xs text-zinc-500">Click the map to drop a pin</p>
+                    </div>
+                  )}
+                </div>
                 {categories.length > 0 && (
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
